@@ -1,512 +1,483 @@
-"use client";
+// pages/index.js
+import { useState, useEffect, useRef } from 'react';
+import Head from 'next/head';
 
-import { useState, useEffect, useRef } from "react";
-
-export default function Home() {
+export default function SensorDataCollector() {
   const [isRecording, setIsRecording] = useState(false);
   const [sensorData, setSensorData] = useState([]);
-  const [locationStatus, setLocationStatus] = useState(
-    "در حال تشخیص موقعیت...",
-  );
-  const [error, setError] = useState("");
+  const [selectedLabel, setSelectedLabel] = useState('');
+  const [customLabel, setCustomLabel] = useState('');
+  const [permissionStatus, setPermissionStatus] = useState('idle');
+  const [currentAcceleration, setCurrentAcceleration] = useState(null);
+  const [currentRotation, setCurrentRotation] = useState(null);
+  
   const dataCollectionRef = useRef([]);
+  const recordingIntervalRef = useRef(null);
 
-  // تشخیص وضعیت تونل مترو
-  const detectMetroTunnelStatus = (data) => {
-    if (data.length < 5) return "داده ناکافی برای تشخیص";
+  // برچسب‌های پیش‌فرض
+  const defaultLabels = [
+    "مسافر در قطار و در حال حرکت در تونل",
+    "مسافر در قطار ایستاده و قطار در ایستگاه هستش",
+    "مسافر ایستاده در ایستگاه و قطار در حال ورود به ایستگاه",
+    "مسافر در حال راه رفتن در ایستگاه که قطار نیست در ایستگاه و در حال ورود هم نیست",
+    "مسافر در ایستگاه و قطار در ریل مخالف در حال ورود به ایستگاه",
+    "مسافر در قطار و قطار در حال ترمز",
+    "مسافر در قطار و قطار در حال شتاب گرفتن",
+    "مسافر در حال سوار شدن به قطار",
+    "مسافر در حال پیاده شدن از قطار",
+    "مسافر در حال انتظار در ایستگاه"
+  ];
 
-    const recentData = data.slice(-20);
-
-    // محاسبه میانگین شتاب
-    const avgAcceleration =
-      recentData.reduce((sum, item) => {
-        if (item.type === "motion" && item.acceleration) {
-          return (
-            sum +
-            (Math.abs(item.acceleration.x) +
-              Math.abs(item.acceleration.y) +
-              Math.abs(item.acceleration.z)) /
-              3
-          );
-        }
-        return sum;
-      }, 0) / recentData.length;
-
-    // محاسبه تغییرات زاویه
-    const orientationChanges = recentData.filter(
-      (item) => item.type === "orientation",
-    ).length;
-
-    // منطق ساده برای تشخیص تونل مترو
-    if (avgAcceleration > 0.3 && orientationChanges > 5) {
-      return "در تونل مترو";
-    } else if (avgAcceleration < 0.1 && orientationChanges < 3) {
-      return "ایستاده یا ثابت";
-    } else {
-      return "در حال حرکت (خارج از تونل)";
-    }
-  };
-
-  useEffect(() => {
-    if (sensorData.length > 4) {
-      setLocationStatus(detectMetroTunnelStatus(sensorData));
-    }
-  }, [sensorData]);
-
+  // درخواست دسترسی به سنسورها
   const requestSensorPermission = async () => {
     try {
-      if (
-        typeof DeviceMotionEvent !== "undefined" &&
-        typeof DeviceMotionEvent.requestPermission === "function"
-      ) {
+      if (typeof DeviceMotionEvent !== 'undefined' && 
+          typeof DeviceMotionEvent.requestPermission === 'function') {
         const permission = await DeviceMotionEvent.requestPermission();
-        if (permission !== "granted") {
-          setError("دسترسی به سنسورها رد شد");
-          return false;
-        }
+        setPermissionStatus(permission);
+        return permission === 'granted';
       }
-      return true;
+      return true; // در مرورگرهایی که نیاز به مجوز ندارند
     } catch (error) {
-      console.error("خطا در درخواست مجوز:", error);
-      setError("خطا در دسترسی به سنسورها");
+      console.error('خطا در دریافت مجوز سنسور:', error);
       return false;
     }
   };
 
-  const handleMotion = (event) => {
-    const newData = {
-      timestamp: new Date().toISOString(),
-      type: "motion",
-      acceleration: {
-        x: event.acceleration?.x || 0,
-        y: event.acceleration?.y || 0,
-        z: event.acceleration?.z || 0,
-      },
-      accelerationIncludingGravity: {
-        x: event.accelerationIncludingGravity?.x || 0,
-        y: event.accelerationIncludingGravity?.y || 0,
-        z: event.accelerationIncludingGravity?.z || 0,
-      },
-      rotationRate: {
-        alpha: event.rotationRate?.alpha || 0,
-        beta: event.rotationRate?.beta || 0,
-        gamma: event.rotationRate?.gamma || 0,
-      },
-      interval: event.interval || 0,
-    };
-
-    dataCollectionRef.current.push(newData);
-    setSensorData((prev) => [...prev.slice(-1000), newData]); // نگه داشتن فقط 1000 داده آخر
-  };
-
-  const handleOrientation = (event) => {
-    const newData = {
-      timestamp: new Date().toISOString(),
-      type: "orientation",
-      alpha: event.alpha || 0,
-      beta: event.beta || 0,
-      gamma: event.gamma || 0,
-      absolute: event.absolute || false,
-    };
-
-    dataCollectionRef.current.push(newData);
-    setSensorData((prev) => [...prev.slice(-1000), newData]);
-  };
-
+  // شروع جمع‌آوری داده
   const startRecording = async () => {
-    try {
-      setError("");
-
-      const hasPermission = await requestSensorPermission();
-      if (!hasPermission) return;
-
-      // شروع جمع‌آوری داده‌ها
-      if (window.DeviceMotionEvent) {
-        window.addEventListener("devicemotion", handleMotion);
-      }
-
-      if (window.DeviceOrientationEvent) {
-        window.addEventListener("deviceorientation", handleOrientation);
-      }
-
-      // درخواست به API
-      const response = await fetch("/api/start-recording", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ startTime: new Date().toISOString() }),
-      });
-
-      if (response.ok) {
-        setIsRecording(true);
-        dataCollectionRef.current = [];
-        setSensorData([]);
-      } else {
-        setError("خطا در شروع ضبط");
-      }
-    } catch (error) {
-      console.error("خطا در شروع ضبط:", error);
-      setError("خطا در شروع ضبط داده‌ها");
-    }
-  };
-
-  const stopRecording = async () => {
-    try {
-      // توقف جمع‌آوری داده‌ها
-      window.removeEventListener("devicemotion", handleMotion);
-      window.removeEventListener("deviceorientation", handleOrientation);
-
-      // درخواست به API
-      const response = await fetch("/api/stop-recording", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          endTime: new Date().toISOString(),
-          dataCount: dataCollectionRef.current.length,
-        }),
-      });
-
-      if (response.ok) {
-        setIsRecording(false);
-      } else {
-        setError("خطا در توقف ضبط");
-      }
-    } catch (error) {
-      console.error("خطا در توقف ضبط:", error);
-      setError("خطا در توقف ضبط داده‌ها");
-    }
-  };
-
-  const downloadData = () => {
-    if (dataCollectionRef.current.length === 0) {
-      setError("داده‌ای برای دانلود وجود ندارد");
+    const hasPermission = await requestSensorPermission();
+    if (!hasPermission) {
+      alert('دسترسی به سنسورها لازم است');
       return;
     }
 
-    const dataToExport = {
-      metadata: {
-        exportTime: new Date().toISOString(),
-        totalRecords: dataCollectionRef.current.length,
-        recordingDuration:
-          dataCollectionRef.current.length > 0
-            ? new Date(
-                dataCollectionRef.current[
-                  dataCollectionRef.current.length - 1
-                ].timestamp,
-              ) - new Date(dataCollectionRef.current[0].timestamp)
-            : 0,
-      },
-      sensorData: dataCollectionRef.current,
+    setIsRecording(true);
+    dataCollectionRef.current = [];
+    
+    // جمع‌آوری داده هر 100 میلی‌ثانیه
+    recordingIntervalRef.current = setInterval(() => {
+      const timestamp = Date.now();
+      const dataPoint = {
+        timestamp,
+        acceleration: { ...currentAcceleration },
+        rotation: { ...currentRotation },
+        label: selectedLabel || customLabel
+      };
+      
+      dataCollectionRef.current.push(dataPoint);
+    }, 100);
+  };
+
+  // توقف جمع‌آوری داده
+  const stopRecording = () => {
+    setIsRecording(false);
+    if (recordingIntervalRef.current) {
+      clearInterval(recordingIntervalRef.current);
+    }
+    
+    // ذخیره داده‌های جمع‌آوری شده
+    setSensorData(prev => [...prev, ...dataCollectionRef.current]);
+    dataCollectionRef.current = [];
+  };
+
+  // گوش دادن به داده‌های شتاب‌سنج
+  useEffect(() => {
+    const handleDeviceMotion = (event) => {
+      const { acceleration, accelerationIncludingGravity, rotationRate } = event;
+      
+      setCurrentAcceleration({
+        x: acceleration?.x || 0,
+        y: acceleration?.y || 0,
+        z: acceleration?.z || 0,
+        xIncludingGravity: accelerationIncludingGravity?.x || 0,
+        yIncludingGravity: accelerationIncludingGravity?.y || 0,
+        zIncludingGravity: accelerationIncludingGravity?.z || 0
+      });
+      
+      setCurrentRotation({
+        alpha: rotationRate?.alpha || 0,
+        beta: rotationRate?.beta || 0,
+        gamma: rotationRate?.gamma || 0
+      });
     };
 
-    const dataStr = JSON.stringify(dataToExport, null, 2);
-    const dataBlob = new Blob([dataStr], { type: "application/json" });
+    window.addEventListener('devicemotion', handleDeviceMotion);
+    
+    return () => {
+      window.removeEventListener('devicemotion', handleDeviceMotion);
+    };
+  }, []);
 
-    const url = URL.createObjectURL(dataBlob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `sensor-data-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.json`;
-    document.body.appendChild(link);
+  // دانلود داده‌ها به صورت JSON
+  const downloadData = () => {
+    if (sensorData.length === 0) {
+      alert('داده‌ای برای دانلود وجود ندارد');
+      return;
+    }
+    
+    const dataStr = JSON.stringify(sensorData, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(dataBlob);
+    link.download = `sensor-data-${Date.now()}.json`;
     link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+  };
+
+  // پاک کردن تمام داده‌ها
+  const clearData = () => {
+    if (confirm('آیا از پاک کردن تمام داده‌ها مطمئن هستید؟')) {
+      setSensorData([]);
+    }
   };
 
   return (
     <div className="container">
-      <header className="header">
-        <h1 className="title">سیستم جمع‌آوری داده‌های سنسور مترو</h1>
-        <p className="subtitle">تحلیل وضعیت کاربران در تونل مترو</p>
-      </header>
+      <Head>
+        <title>سیستم جمع‌آوری داده سنسور برای تشخیص حرکت قطار</title>
+        <meta name="description" content="جمع‌آوری داده‌های سنسور برای آموزش مدل هوش مصنوعی" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+      </Head>
 
       <main className="main">
-        <section className="status-section">
-          <div className="status-card">
-            <h2 className="status-title">وضعیت فعلی</h2>
-            <div
-              className={`status-indicator ${locationStatus.includes("تونل") ? "in-tunnel" : "outside-tunnel"}`}
-            >
-              {locationStatus}
-            </div>
-            <div className="stats">
-              <div className="stat">
-                <span className="stat-label">تعداد داده‌ها:</span>
-                <span className="stat-value">{sensorData.length}</span>
+        <h1 className="title">سیستم جمع‌آوری داده سنسور</h1>
+        
+        <div className="status-section">
+          <div className={`status-indicator ${isRecording ? 'recording' : 'idle'}`}>
+            {isRecording ? 'در حال ضبط' : 'آماده'}
+          </div>
+          
+          <div className="sensor-readings">
+            {currentAcceleration && (
+              <div className="sensor-data">
+                <h3>داده‌های لحظه‌ای:</h3>
+                <p>شتاب X: {currentAcceleration.x?.toFixed(4)}</p>
+                <p>شتاب Y: {currentAcceleration.y?.toFixed(4)}</p>
+                <p>شتاب Z: {currentAcceleration.z?.toFixed(4)}</p>
+                <p>چرخش Alpha: {currentRotation?.alpha?.toFixed(4)}</p>
+                <p>چرخش Beta: {currentRotation?.beta?.toFixed(4)}</p>
+                <p>چرخش Gamma: {currentRotation?.gamma?.toFixed(4)}</p>
               </div>
-              <div className="stat">
-                <span className="stat-label">وضعیت ضبط:</span>
-                <span
-                  className={`stat-value ${isRecording ? "recording" : "stopped"}`}
+            )}
+          </div>
+        </div>
+        
+        <div className="control-section">
+          <div className="label-selection">
+            <h3>انتخاب وضعیت:</h3>
+            
+            <div className="default-labels">
+              {defaultLabels.map((label, index) => (
+                <button
+                  key={index}
+                  className={`label-btn ${selectedLabel === label ? 'selected' : ''}`}
+                  onClick={() => setSelectedLabel(label)}
                 >
-                  {isRecording ? "در حال ضبط" : "متوقف شده"}
-                </span>
-              </div>
+                  {label}
+                </button>
+              ))}
+            </div>
+            
+            <div className="custom-label">
+              <h4>وضعیت سفارشی:</h4>
+              <input
+                type="text"
+                value={customLabel}
+                onChange={(e) => setCustomLabel(e.target.value)}
+                placeholder="وضعیت جدید را وارد کنید..."
+              />
+              <button 
+                onClick={() => {
+                  setSelectedLabel(customLabel);
+                  setCustomLabel('');
+                }}
+              >
+                استفاده از وضعیت سفارشی
+              </button>
+            </div>
+            
+            <div className="current-label">
+              <strong>وضعیت انتخاب شده:</strong> {selectedLabel || 'هیچ‌کدام'}
             </div>
           </div>
-        </section>
-
-        {error && <div className="error-message">{error}</div>}
-
-        <section className="controls-section">
-          <div className="controls">
-            <button
-              onClick={startRecording}
-              disabled={isRecording}
-              className="btn btn-start"
-            >
-              🎯 شروع ضبط سنسورها
-            </button>
-
-            <button
-              onClick={stopRecording}
-              disabled={!isRecording}
-              className="btn btn-stop"
-            >
-              ⏹️ توقف ضبط
-            </button>
-
-            <button
-              onClick={downloadData}
-              disabled={sensorData.length === 0}
-              className="btn btn-download"
-            >
-              📥 دانلود داده‌ها (JSON)
-            </button>
+          
+          <div className="recording-controls">
+            {!isRecording ? (
+              <button 
+                className="start-btn"
+                onClick={startRecording}
+                disabled={!selectedLabel}
+              >
+                شروع ضبط
+              </button>
+            ) : (
+              <button 
+                className="stop-btn"
+                onClick={stopRecording}
+              >
+                توقف ضبط
+              </button>
+            )}
           </div>
-        </section>
-
-        {sensorData.length > 0 && (
-          <section className="data-section">
-            <h3 className="section-title">پیش‌نمایش داده‌ها</h3>
-            <div className="data-preview">
-              <div className="data-info">
-                <span>
-                  نمایش آخرین ۵ داده از {sensorData.length} داده جمع‌آوری شده
-                </span>
-              </div>
-              <pre className="data-json">
-                {JSON.stringify(sensorData.slice(-5), null, 2)}
-              </pre>
+        </div>
+        
+        <div className="data-section">
+          <div className="data-header">
+            <h3>داده‌های جمع‌آوری شده: {sensorData.length} نقطه داده</h3>
+            <div className="data-actions">
+              <button 
+                className="download-btn"
+                onClick={downloadData}
+                disabled={sensorData.length === 0}
+              >
+                دانلود داده‌ها
+              </button>
+              <button 
+                className="clear-btn"
+                onClick={clearData}
+                disabled={sensorData.length === 0}
+              >
+                پاک کردن همه
+              </button>
             </div>
-          </section>
-        )}
+          </div>
+          
+          <div className="data-preview">
+            {sensorData.slice(-5).map((data, index) => (
+              <div key={index} className="data-point">
+                <p>زمان: {new Date(data.timestamp).toLocaleTimeString('fa-IR')}</p>
+                <p>وضعیت: {data.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
       </main>
 
       <style jsx>{`
         .container {
           min-height: 100vh;
-          padding: 20px;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-          font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+          padding: 0 1rem;
+          direction: rtl;
+          font-family: 'Tahoma', 'Arial', sans-serif;
         }
-
-        .header {
-          text-align: center;
-          margin-bottom: 30px;
-          color: white;
-        }
-
-        .title {
-          font-size: 2.5rem;
-          margin-bottom: 10px;
-          text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
-        }
-
-        .subtitle {
-          font-size: 1.2rem;
-          opacity: 0.9;
-        }
-
+        
         .main {
           max-width: 800px;
           margin: 0 auto;
+          padding: 2rem 0;
         }
-
+        
+        .title {
+          text-align: center;
+          margin-bottom: 2rem;
+          color: #2c3e50;
+        }
+        
         .status-section {
-          margin-bottom: 30px;
-        }
-
-        .status-card {
-          background: white;
-          padding: 25px;
-          border-radius: 15px;
-          box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
-          text-align: center;
-        }
-
-        .status-title {
-          font-size: 1.5rem;
-          color: #333;
-          margin-bottom: 20px;
-        }
-
-        .status-indicator {
-          font-size: 1.8rem;
-          font-weight: bold;
-          padding: 15px;
-          border-radius: 10px;
-          margin-bottom: 20px;
-          transition: all 0.3s ease;
-        }
-
-        .status-indicator.in-tunnel {
-          background: #ff6b6b;
-          color: white;
-        }
-
-        .status-indicator.outside-tunnel {
-          background: #51cf66;
-          color: white;
-        }
-
-        .stats {
-          display: flex;
-          justify-content: space-around;
-          flex-wrap: wrap;
-          gap: 15px;
-        }
-
-        .stat {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-        }
-
-        .stat-label {
-          font-size: 0.9rem;
-          color: #666;
-          margin-bottom: 5px;
-        }
-
-        .stat-value {
-          font-size: 1.2rem;
-          font-weight: bold;
-          color: #333;
-        }
-
-        .stat-value.recording {
-          color: #e74c3c;
-        }
-
-        .stat-value.stopped {
-          color: #27ae60;
-        }
-
-        .error-message {
-          background: #e74c3c;
-          color: white;
-          padding: 15px;
-          border-radius: 10px;
-          margin-bottom: 20px;
-          text-align: center;
-          font-weight: bold;
-        }
-
-        .controls-section {
-          margin-bottom: 30px;
-        }
-
-        .controls {
-          display: flex;
-          flex-direction: column;
-          gap: 15px;
-          align-items: center;
-        }
-
-        .btn {
-          padding: 15px 25px;
-          border: none;
-          border-radius: 10px;
-          font-size: 1.1rem;
-          font-weight: bold;
-          cursor: pointer;
-          transition: all 0.3s ease;
-          width: 250px;
-          text-align: center;
-        }
-
-        .btn:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-          transform: none;
-        }
-
-        .btn:not(:disabled):hover {
-          transform: translateY(-2px);
-          box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
-        }
-
-        .btn-start {
-          background: #27ae60;
-          color: white;
-        }
-
-        .btn-stop {
-          background: #e74c3c;
-          color: white;
-        }
-
-        .btn-download {
-          background: #3498db;
-          color: white;
-        }
-
-        .data-section {
-          background: white;
-          padding: 25px;
-          border-radius: 15px;
-          box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
-        }
-
-        .section-title {
-          font-size: 1.5rem;
-          color: #333;
-          margin-bottom: 15px;
-          text-align: center;
-        }
-
-        .data-preview {
           background: #f8f9fa;
-          border-radius: 10px;
-          padding: 20px;
-          border: 1px solid #e9ecef;
-        }
-
-        .data-info {
-          text-align: center;
-          color: #666;
-          margin-bottom: 15px;
-          font-size: 0.9rem;
-        }
-
-        .data-json {
-          background: #2d3748;
-          color: #e2e8f0;
-          padding: 15px;
+          padding: 1rem;
           border-radius: 8px;
-          overflow-x: auto;
-          font-size: 0.85rem;
+          margin-bottom: 1.5rem;
+        }
+        
+        .status-indicator {
+          display: inline-block;
+          padding: 0.5rem 1rem;
+          border-radius: 20px;
+          font-weight: bold;
+          margin-bottom: 1rem;
+        }
+        
+        .status-indicator.idle {
+          background: #e9ecef;
+          color: #6c757d;
+        }
+        
+        .status-indicator.recording {
+          background: #d4edda;
+          color: #155724;
+          animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+          0% { opacity: 1; }
+          50% { opacity: 0.7; }
+          100% { opacity: 1; }
+        }
+        
+        .sensor-data {
+          font-family: monospace;
+          background: white;
+          padding: 1rem;
+          border-radius: 4px;
+        }
+        
+        .control-section {
+          display: grid;
+          grid-template-columns: 2fr 1fr;
+          gap: 1.5rem;
+          margin-bottom: 1.5rem;
+        }
+        
+        @media (max-width: 768px) {
+          .control-section {
+            grid-template-columns: 1fr;
+          }
+        }
+        
+        .label-selection {
+          background: #f8f9fa;
+          padding: 1rem;
+          border-radius: 8px;
+        }
+        
+        .default-labels {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 0.5rem;
+          margin-bottom: 1rem;
+        }
+        
+        .label-btn {
+          padding: 0.5rem;
+          border: 1px solid #dee2e6;
+          background: white;
+          border-radius: 4px;
+          cursor: pointer;
+          text-align: right;
+          transition: all 0.2s;
+        }
+        
+        .label-btn:hover {
+          background: #e9ecef;
+        }
+        
+        .label-btn.selected {
+          background: #007bff;
+          color: white;
+          border-color: #007bff;
+        }
+        
+        .custom-label {
+          margin-bottom: 1rem;
+        }
+        
+        .custom-label input {
+          width: 100%;
+          padding: 0.5rem;
+          margin-bottom: 0.5rem;
+          border: 1px solid #dee2e6;
+          border-radius: 4px;
+        }
+        
+        .custom-label button {
+          width: 100%;
+          padding: 0.5rem;
+          background: #28a745;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          cursor: pointer;
+        }
+        
+        .current-label {
+          padding: 0.5rem;
+          background: #fff3cd;
+          border-radius: 4px;
+          border: 1px solid #ffeaa7;
+        }
+        
+        .recording-controls {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        
+        .start-btn, .stop-btn {
+          padding: 1rem 2rem;
+          font-size: 1.2rem;
+          border: none;
+          border-radius: 8px;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        
+        .start-btn {
+          background: #28a745;
+          color: white;
+        }
+        
+        .start-btn:disabled {
+          background: #6c757d;
+          cursor: not-allowed;
+        }
+        
+        .stop-btn {
+          background: #dc3545;
+          color: white;
+        }
+        
+        .data-section {
+          background: #f8f9fa;
+          padding: 1rem;
+          border-radius: 8px;
+        }
+        
+        .data-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 1rem;
+        }
+        
+        .data-actions {
+          display: flex;
+          gap: 0.5rem;
+        }
+        
+        .download-btn, .clear-btn {
+          padding: 0.5rem 1rem;
+          border: none;
+          border-radius: 4px;
+          cursor: pointer;
+        }
+        
+        .download-btn {
+          background: #17a2b8;
+          color: white;
+        }
+        
+        .download-btn:disabled {
+          background: #6c757d;
+          cursor: not-allowed;
+        }
+        
+        .clear-btn {
+          background: #dc3545;
+          color: white;
+        }
+        
+        .clear-btn:disabled {
+          background: #6c757d;
+          cursor: not-allowed;
+        }
+        
+        .data-preview {
+          background: white;
+          padding: 1rem;
+          border-radius: 4px;
           max-height: 300px;
           overflow-y: auto;
         }
-
-        @media (min-width: 768px) {
-          .controls {
-            flex-direction: row;
-            justify-content: center;
-          }
-
-          .btn {
-            width: 200px;
-          }
-
-          .stats {
-            justify-content: center;
-            gap: 40px;
-          }
+        
+        .data-point {
+          padding: 0.5rem;
+          border-bottom: 1px solid #dee2e6;
+        }
+        
+        .data-point:last-child {
+          border-bottom: none;
         }
       `}</style>
     </div>
